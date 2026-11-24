@@ -45,6 +45,7 @@ Relancer un enregistrement dans le même projet continue la numérotation sans r
 - **Caméras** : cocher celles à enregistrer. Clic sur l'aperçu = image de la caméra. Pendant l'enregistrement, l'aperçu se met à jour toutes les 5 s (pris dans le flux enregistré, sans deuxième connexion à la caméra).
 - **Coupure réseau** : si un flux tombe, ffmpeg est relancé automatiquement et un nouveau fichier commence ; l'état passe à « reconnexion… ».
 - **Arrêt** : les fichiers MP4 sont finalisés proprement (arrêt via l'UI, l'API, ou `docker compose stop`, avec 30 s de délai).
+- **Fichiers** : choisir un disque pour voir les projets (le plus récent en haut). Chaque fichier se télécharge séparément (téléchargement reprenable), ou tout le projet d'un coup avec « Tout (.zip) » (zip sans compression, généré à la volée, donc pas de place supplémentaire sur le disque). Le segment en cours d'écriture est marqué « en cours » : il n'est téléchargeable qu'une fois terminé, et il n'est pas mis dans le zip.
 - **Réglages des caméras** : nom et URL modifiables dans l'interface (sauvés dans `config/config.json`).
 
 ## API (pour Companion)
@@ -55,6 +56,9 @@ Relancer un enregistrement dans le même projet continue la numérotation sans r
 | POST | `/api/stop` | Arrête tout et finalise les fichiers |
 | GET | `/api/status` | État : `recording` (true/false), caméras, taille, espace libre |
 | GET | `/api/locations` | Disques disponibles |
+| GET | `/api/files?dest=/mnt/ssd` | Projets et fichiers d'un disque |
+| GET | `/download?dest=…&project=…&file=…` | Télécharge un fichier (Range supporté) |
+| GET | `/download-zip?dest=…&project=…` | Télécharge tout le projet en .zip |
 
 Companion : module « Generic HTTP », action POST sur `http://<ip-du-pi>:8090/api/start`.
 Attention : relancer avec un projet déjà utilisé reprend le même dossier ; pour un nouveau dossier par spectacle, envoyer `"project": ""` (nom automatique `rec_date_heure`).

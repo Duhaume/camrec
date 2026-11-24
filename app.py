@@ -11,9 +11,11 @@ import signal
 import subprocess
 import threading
 import time
+import zipfile
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, quote, urlparse
 
 PORT = int(os.environ.get("CAMREC_PORT", "8090"))
 CONFIG_DIR = Path(os.environ.get("CAMREC_CONFIG", "/config"))
@@ -346,6 +348,70 @@ def thumbnail(cam_id):
     return data
 
 
+# ---------------------------------------------------------------- fichiers
+FILE_EXT = (".mp4", ".log")
+
+
+def resolve_in_location(dest, *parts):
+    """Chemin sous un emplacement autorisé, sans sortie possible (.., liens)."""
+    if dest not in {l["path"] for l in locations()}:
+        return None
+    for part in parts:
+        if not part or part in (".", "..") or "/" in part or "\\" in part or "\0" in part:
+            return None
+    base = os.path.realpath(dest)
+    p = os.path.realpath(os.path.join(dest, *parts))
+    return p if p.startswith(base + os.sep) else None
+
+
+def open_files():
+    """Fichiers en cours d'écriture (dernier segment de chaque caméra qui enregistre)."""
+    out = set()
+    with lock:
+        s = session
+        recs = list(s["recorders"].values()) if s else []
+    for r in recs:
+        if r.state in ("starting", "recording", "reconnecting"):
+            files = sorted(r.out_dir.glob(f"{r.prefix}_*.mp4"))
+            if files:
+                out.add(os.path.realpath(files[-1]))
+    return out
+
+
+def list_projects(dest):
+    if dest not in {l["path"] for l in locations()}:
+        return None
+    busy = open_files()
+    projects = []
+    try:
+        entries = list(os.scandir(dest))
+    except OSError:
+        return []
+    for d in entries:
+        if not d.is_dir(follow_symlinks=False) or d.name.startswith("."):
+            continue
+        files = []
+        try:
+            for f in os.scandir(d.path):
+                if f.is_file(follow_symlinks=False) and f.name.lower().endswith(FILE_EXT):
+                    st = f.stat()
+                    files.append({"name": f.name, "size": st.st_size, "mtime": st.st_mtime,
+                                  "open": os.path.realpath(f.path) in busy})
+        except OSError:
+            continue
+        if not any(f["name"].lower().endswith(".mp4") for f in files):
+            continue  # on ne montre que les dossiers d'enregistrement
+        files.sort(key=lambda f: (not f["name"].endswith(".mp4"), f["name"]))
+        projects.append({
+            "name": d.name,
+            "mtime": max(f["mtime"] for f in files),
+            "size": sum(f["size"] for f in files),
+            "files": files,
+        })
+    projects.sort(key=lambda p: -p["mtime"])
+    return projects
+
+
 # ---------------------------------------------------------------- HTTP
 class Handler(BaseHTTPRequestHandler):
     server_version = "CamRec"
@@ -374,8 +440,87 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return {}
 
+    def _download(self, fpath):
+        try:
+            size = os.path.getsize(fpath)
+            f = open(fpath, "rb")
+        except OSError:
+            return self._send(404, {"error": "fichier introuvable"})
+        start, end, code = 0, size - 1, 200
+        m = re.fullmatch(r"bytes=(\d*)-(\d*)", self.headers.get("Range", "").strip())
+        if m and size:
+            if m.group(1):
+                start = int(m.group(1))
+                end = int(m.group(2)) if m.group(2) else size - 1
+            else:  # bytes=-N : les N derniers octets
+                start = max(0, size - int(m.group(2) or 0))
+            end = min(end, size - 1)
+            if start > end:
+                f.close()
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            code = 206
+        name = os.path.basename(fpath)
+        self.send_response(code)
+        self.send_header("Content-Type", "video/mp4" if name.endswith(".mp4") else "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Accept-Ranges", "bytes")
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(name)}")
+        self.end_headers()
+        try:
+            with f:
+                f.seek(start)
+                left = end - start + 1
+                while left > 0:
+                    chunk = f.read(min(1 << 20, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _zip(self, pdir, project):
+        busy = open_files()
+        files = sorted((f for f in os.scandir(pdir)
+                        if f.is_file(follow_symlinks=False) and f.name.lower().endswith(FILE_EXT)
+                        and os.path.realpath(f.path) not in busy), key=lambda f: f.name)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(project)}.zip")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:  # zip sans compression (la vidéo ne se compresse pas), écrit au fil de l'eau
+            with zipfile.ZipFile(self.wfile, "w", zipfile.ZIP_STORED, allowZip64=True) as z:
+                for f in files:
+                    z.write(f.path, f"{project}/{f.name}")
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_GET(self):
-        path = self.path.split("?")[0]
+        u = urlparse(self.path)
+        path = u.path
+        q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        if path == "/api/files":
+            res = list_projects(q.get("dest", ""))
+            return self._send(200, res) if res is not None else self._send(400, {"error": "emplacement inconnu"})
+        if path == "/download":
+            fp = resolve_in_location(q.get("dest", ""), q.get("project", ""), q.get("file", ""))
+            if not fp or not fp.lower().endswith(FILE_EXT) or not os.path.isfile(fp):
+                return self._send(404, {"error": "fichier introuvable"})
+            if fp in open_files():
+                return self._send(409, {"error": "fichier en cours d'enregistrement"})
+            return self._download(fp)
+        if path == "/download-zip":
+            pd = resolve_in_location(q.get("dest", ""), q.get("project", ""))
+            if not pd or not os.path.isdir(pd):
+                return self._send(404, {"error": "projet introuvable"})
+            return self._zip(pd, os.path.basename(pd))
         if path in ("/", "/index.html"):
             return self._send(200, (HERE / "index.html").read_bytes(), "text/html; charset=utf-8")
         if path == "/api/status":
