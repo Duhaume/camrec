@@ -1,0 +1,22 @@
+services:
+  camrec:
+    build: .
+    image: camrec:latest
+    container_name: camrec
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    # uid:gid du compte du Pi (id -u / id -g), pour que les fichiers t'appartiennent
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      - TZ=Europe/Vienna
+      - RECORD_ROOTS=/media,/mnt,/recordings
+    volumes:
+      - ./config:/config
+      # disques USB/NVMe : montés sous /media ou /mnt sur le Pi ; rslave = un disque branché après le démarrage apparaît aussi
+      - /media:/media:rslave
+      - /mnt:/mnt:rslave
+      # dossier par défaut si aucun disque externe
+      - ./recordings:/recordings
+    # laisse le temps à ffmpeg de finaliser les MP4 à l'arrêt du conteneur
+    stop_grace_period: 30s

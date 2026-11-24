@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CamRec · enregistrement caméras</title>
+<style>
+:root{--bg:#141517;--panel:#1d1f22;--line:#2d3035;--tx:#e8e8e6;--mute:#8c9096;--acc:#3d8bfd;--rec:#e5484d;--ok:#46a758;--warn:#e5a50a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+h1{font-size:20px;margin:0;flex:1}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:0 0 10px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:14px}
+.badge{display:inline-flex;align-items:center;gap:7px;font-weight:600;font-size:13px;padding:5px 10px;border-radius:99px;background:#26282c;color:var(--mute)}
+.badge.on{background:rgba(229,72,77,.15);color:#ff8b8f}
+.dot{width:9px;height:9px;border-radius:50%;background:currentColor}
+.badge.on .dot{animation:blink 1.2s infinite}
+@keyframes blink{50%{opacity:.25}}
+.cams{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.cam{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#17181b}
+.cam.sel{border-color:var(--acc)}
+.thumb{aspect-ratio:16/9;background:#0c0d0e;display:flex;align-items:center;justify-content:center;color:var(--mute);font-size:13px;position:relative;cursor:pointer}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.thumb .hint{position:absolute;bottom:6px;right:8px;font-size:11px;background:rgba(0,0,0,.6);padding:2px 6px;border-radius:4px}
+.cam-b{padding:10px 12px;display:grid;gap:4px}
+.cam-b label{display:flex;gap:9px;align-items:center;font-weight:600;cursor:pointer}
+.cam-b input{width:18px;height:18px;accent-color:var(--acc)}
+.meta{font-size:12.5px;color:var(--mute);display:flex;justify-content:space-between;gap:8px}
+.st{font-weight:600}
+.st.recording{color:#ff8b8f}.st.reconnecting{color:var(--warn)}.st.error{color:var(--rec)}.st.stopped{color:var(--ok)}
+.err{font-size:12px;color:var(--warn);word-break:break-word}
+.row{display:grid;grid-template-columns:1fr 1fr 150px;gap:12px}
+@media(max-width:700px){.row{grid-template-columns:1fr}}
+.f label{display:block;font-size:12.5px;color:var(--mute);margin-bottom:5px}
+input[type=text],input[type=number],select{width:100%;background:#121315;color:var(--tx);border:1px solid var(--line);border-radius:6px;padding:9px 10px;font:inherit}
+input:focus,select:focus{outline:2px solid var(--acc);outline-offset:-1px}
+.disk{font-size:12px;color:var(--mute);margin-top:5px}
+.actions{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;align-items:center}
+button{font:inherit;font-weight:600;border:0;border-radius:6px;padding:11px 20px;cursor:pointer;background:#2b2e33;color:var(--tx)}
+button:disabled{opacity:.4;cursor:not-allowed}
+.go{background:var(--rec);color:#fff;min-width:200px}
+.stop{background:#e8e8e6;color:#111;min-width:200px}
+.small{padding:6px 12px;font-size:13px}
+.out{font-size:13px;color:var(--mute)}
+.out b{color:var(--tx);font-variant-numeric:tabular-nums}
+.msg{margin-top:10px;font-size:13.5px;color:var(--warn);min-height:1.2em}
+details summary{cursor:pointer;color:var(--mute);font-size:13px}
+table{width:100%;border-collapse:collapse;margin-top:10px}
+td{padding:4px 6px 4px 0}
+td input{padding:7px 8px}
+code{font-size:12.5px;background:#121315;padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Enregistrement caméras</h1>
+  <span class="badge" id="badge"><span class="dot"></span><span id="badgeTx">À l'arrêt</span></span>
+</header>
+
+<section class="panel">
+  <h2>Caméras</h2>
+  <div class="cams" id="cams"></div>
+</section>
+
+<section class="panel">
+  <h2>Destination</h2>
+  <div class="row">
+    <div class="f">
+      <label for="dest">Disque / emplacement</label>
+      <select id="dest"></select>
+      <div class="disk" id="diskInfo"></div>
+    </div>
+    <div class="f">
+      <label for="project">Nom du projet (dossier)</label>
+      <input type="text" id="project" placeholder="vide = rec_date_heure" maxlength="80">
+    </div>
+    <div class="f">
+      <label for="seg">Fichiers de (min)</label>
+      <input type="number" id="seg" min="1" step="1">
+    </div>
+  </div>
+  <div class="actions">
+    <button class="go" id="btnGo">● Enregistrer</button>
+    <button class="stop" id="btnStop" hidden>■ Arrêter</button>
+    <button class="small" id="btnRefresh" title="Relire la liste des disques">Rafraîchir les disques</button>
+    <span class="out" id="out"></span>
+  </div>
+  <div class="msg" id="msg"></div>
+</section>
+
+<section class="panel">
+  <details id="cfgBox">
+    <summary>Réglages des caméras</summary>
+    <table id="cfgTbl"><thead><tr><td>Id</td><td>Nom</td><td>URL (rtmp:// ou rtsp://)</td><td></td></tr></thead><tbody></tbody></table>
+    <div class="actions">
+      <button class="small" id="btnAdd">+ Caméra</button>
+      <button class="small" id="btnSaveCfg">Enregistrer les réglages</button>
+    </div>
+    <p class="out">Companion : <code>POST /api/start</code> (relance avec les derniers réglages) · <code>POST /api/stop</code> · <code>GET /api/status</code></p>
+  </details>
+</section>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+let st=null, locs=[], selected=new Set(), firstLoad=true, thumbsLoaded=new Set();
+
+function fmtBytes(b){if(b==null)return'–';const u=['o','Ko','Mo','Go','To'];let i=0;while(b>=1024&&i<u.length-1){b/=1024;i++}return b.toFixed(i>1?1:0)+' '+u[i]}
+function fmtDur(s){s=Math.max(0,Math.floor(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return `${h}:${String(m).padStart(2,'0')}:${String(x).padStart(2,'0')}`}
+const LBL={idle:'—',starting:'démarrage…',recording:'enregistre',reconnecting:'reconnexion…',error:'erreur',stopped:'terminé'};
+
+async function api(path,body){
+  const r=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(j.error||r.statusText);
+  return j;
+}
+
+function loadThumb(id,quiet){
+  const box=document.querySelector(`.thumb[data-id="${id}"]`);if(!box)return;
+  if(!quiet)box.innerHTML='chargement…';
+  const img=new Image();
+  img.onload=()=>{box.innerHTML='';box.appendChild(img);const h=document.createElement('span');h.className='hint';h.textContent='clic = actualiser';box.appendChild(h)};
+  img.onerror=()=>{if(quiet&&box.querySelector('img'))return;box.innerHTML='pas d\'image (caméra injoignable ?)<span class="hint">clic = réessayer</span>'};
+  img.src=`/api/thumb/${encodeURIComponent(id)}?t=${Date.now()}`;
+}
+
+function renderCams(){
+  const wrap=$('#cams');
+  const ids=st.cameras.map(c=>c.id).join();
+  if(wrap.dataset.ids!==ids){
+    wrap.dataset.ids=ids;
+    wrap.innerHTML=st.cameras.map(c=>`
+      <div class="cam" data-id="${c.id}">
+        <div class="thumb" data-id="${c.id}">aperçu : cliquer</div>
+        <div class="cam-b">
+          <label><input type="checkbox" data-id="${c.id}"> <span class="nm"></span></label>
+          <div class="meta"><span class="st"></span><span class="sz"></span></div>
+          <div class="err"></div>
+        </div>
+      </div>`).join('');
+    wrap.querySelectorAll('input[type=checkbox]').forEach(cb=>cb.onchange=()=>{cb.checked?selected.add(cb.dataset.id):selected.delete(cb.dataset.id);renderCams()});
+    wrap.querySelectorAll('.thumb').forEach(t=>t.onclick=()=>loadThumb(t.dataset.id));
+  }
+  for(const c of st.cameras){
+    const el=wrap.querySelector(`.cam[data-id="${c.id}"]`);
+    el.classList.toggle('sel',selected.has(c.id));
+    const cb=el.querySelector('input');cb.checked=selected.has(c.id);cb.disabled=st.recording;
+    el.querySelector('.nm').textContent=c.name;
+    const s=el.querySelector('.st');s.className='st '+c.state;s.textContent=LBL[c.state]||c.state;
+    el.querySelector('.sz').textContent=c.files.length?`${c.files.length} fichier${c.files.length>1?'s':''} · ${fmtBytes(c.bytes)}`:'';
+    el.querySelector('.err').textContent=(c.state==='reconnecting'||c.state==='error')&&c.error?`${c.error}${c.restarts?` (relances : ${c.restarts})`:''}`:'';
+  }
+}
+
+function renderLocs(){
+  const sel=$('#dest'), cur=sel.value||(st&&st.last.dest);
+  sel.innerHTML=locs.length?locs.map(l=>`<option value="${l.path}" ${l.writable?'':'disabled'}>${l.path}${l.mount?'':' (dossier)'} · ${fmtBytes(l.free)} libres${l.writable?'':' · lecture seule'}</option>`).join(''):'<option value="">aucun disque trouvé</option>';
+  if(cur&&locs.some(l=>l.path===cur))sel.value=cur;
+  else{const best=locs.filter(l=>l.writable&&l.mount).sort((a,b)=>b.free-a.free)[0];if(best)sel.value=best.path}
+  diskInfo();
+}
+function diskInfo(){
+  const l=locs.find(x=>x.path===$('#dest').value);
+  $('#diskInfo').textContent=l?`${fmtBytes(l.free)} libres sur ${fmtBytes(l.total)}`:'';
+}
+
+function render(){
+  const rec=st.recording;
+  $('#badge').classList.toggle('on',rec);
+  $('#badgeTx').textContent=rec?'REC '+fmtDur(st.now-st.started_at):'À l\'arrêt';
+  $('#btnGo').hidden=rec;$('#btnStop').hidden=!rec;
+  $('#btnGo').disabled=!selected.size||!$('#dest').value;
+  ['#dest','#project','#seg'].forEach(s=>$(s).disabled=rec);
+  const total=st.cameras.reduce((a,c)=>a+c.bytes,0);
+  $('#out').innerHTML=st.dir?`${rec?'En cours':'Dernier enregistrement'} : <b>${st.dir}</b> · ${fmtBytes(total)}${st.free!=null?` · ${fmtBytes(st.free)} libres`:''}`:'';
+  if(rec&&st.free!=null&&st.free<5*1024**3)$('#msg').textContent='Attention : moins de 5 Go libres sur le disque.';
+  renderCams();
+}
+
+async function poll(){
+  try{
+    st=await api('/api/status');
+    if(firstLoad){
+      firstLoad=false;
+      selected=new Set(st.recording?st.cameras.filter(c=>c.state!=='idle').map(c=>c.id):st.last.cams);
+      $('#project').value=st.last.project||'';
+      $('#seg').value=Math.round(st.segment_time/60);
+      renderLocs();fillCfg();
+    }
+    render();
+  }catch(e){$('#badgeTx').textContent='Serveur injoignable'}
+}
+
+async function refreshLocs(){try{locs=await api('/api/locations');renderLocs();render()}catch(e){}}
+
+$('#dest').onchange=()=>{diskInfo();render()};
+$('#btnRefresh').onclick=refreshLocs;
+$('#btnGo').onclick=async()=>{
+  $('#msg').textContent='';
+  try{
+    st=await api('/api/start',{cams:[...selected],dest:$('#dest').value,project:$('#project').value.trim(),segment_time:Math.max(1,+$('#seg').value||30)*60});
+    $('#project').value=st.project;render();
+  }catch(e){$('#msg').textContent=e.message}
+};
+$('#btnStop').onclick=async()=>{
+  if(!confirm('Arrêter tous les enregistrements ?'))return;
+  $('#btnStop').disabled=true;$('#msg').textContent='Arrêt et finalisation des fichiers…';
+  try{await api('/api/stop',{})}catch(e){$('#msg').textContent=e.message}
+  const t=setInterval(async()=>{await poll();if(!st.recording){clearInterval(t);$('#btnStop').disabled=false;$('#msg').textContent='Fichiers finalisés.'}},1000);
+};
+
+// réglages caméras
+function cfgRow(c={id:'',name:'',url:''}){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td style="width:90px"><input type="text" class="cid"></td><td style="width:180px"><input type="text" class="cnm"></td><td><input type="text" class="curl"></td><td style="width:40px"><button class="small" title="Supprimer">✕</button></td>`;
+  tr.querySelector('.cid').value=c.id;tr.querySelector('.cnm').value=c.name;tr.querySelector('.curl').value=c.url;
+  tr.querySelector('button').onclick=()=>tr.remove();
+  return tr;
+}
+function fillCfg(){const tb=$('#cfgTbl tbody');tb.innerHTML='';st.cameras.forEach(c=>tb.appendChild(cfgRow(c)))}
+$('#btnAdd').onclick=()=>$('#cfgTbl tbody').appendChild(cfgRow({id:'cam'+($('#cfgTbl tbody').children.length+1),name:'',url:'rtmp://'}));
+$('#btnSaveCfg').onclick=async()=>{
+  const cameras=[...$('#cfgTbl tbody').children].map(tr=>({id:tr.querySelector('.cid').value.trim(),name:tr.querySelector('.cnm').value.trim(),url:tr.querySelector('.curl').value.trim()}));
+  try{await api('/api/config',{cameras});$('#msg').textContent='Réglages enregistrés.';thumbsLoaded.clear();await poll();fillCfg()}
+  catch(e){$('#msg').textContent=e.message}
+};
+
+refreshLocs();poll();setInterval(poll,2000);
+setInterval(()=>{if(st&&st.recording)st.cameras.filter(c=>c.state==='recording').forEach(c=>loadThumb(c.id,true))},5000);
+setInterval(refreshLocs,30000);
+</script>
+</body>
+</html>
